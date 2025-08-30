@@ -1,1 +1,4 @@
 ## RAGBOT
+
+
+![UI](UI.png)
