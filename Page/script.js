@@ -1,8 +1,3 @@
-// Firebase initialization variables for Canvas environment
-const __app_id = "your-app-id";
-const __firebase_config = "{}";
-const __initial_auth_token = "your-auth-token";
-
 // DOM elements
 const chatContainer = document.getElementById('chat-container');
 const inputForm = document.getElementById('input-form');
@@ -10,160 +5,231 @@ const userInput = document.getElementById('user-input');
 const sendButton = document.getElementById('send-button');
 const fileInput = document.getElementById('file-input');
 const viewKnowledgeBtn = document.getElementById('view-knowledge-btn');
+const resetKnowledgeBtn = document.getElementById('reset-knowledge-btn');
 const knowledgeModal = document.getElementById('knowledge-modal');
 const closeModalBtn = document.getElementById('close-modal-btn');
 const knowledgeList = document.getElementById('knowledge-list');
 
-// Function to add a message to the chat interface
-function addMessage(text, type, source = null) {
+// Prompt history
+const promptHistory = [];
+let historyIndex = -1;
+
+// Add message to chat
+function addMessage(text, type, source=null, highlight=null, quickReplies=[], tokens=null) {
     const messageDiv = document.createElement('div');
-    messageDiv.classList.add('message');
-    messageDiv.classList.add(type);
+    messageDiv.classList.add('message', type);
 
     const content = document.createElement('p');
     content.textContent = text;
     messageDiv.appendChild(content);
 
-    if (source) {
+    if(source) {
         const sourceDiv = document.createElement('div');
         sourceDiv.classList.add('source-link', 'mt-2');
         sourceDiv.textContent = `Source: ${source}`;
         messageDiv.appendChild(sourceDiv);
     }
 
+    if(highlight) {
+        const highlightDiv = document.createElement('div');
+        highlightDiv.classList.add('highlight-snippet');
+        highlightDiv.textContent = `"${highlight}"`;
+        messageDiv.appendChild(highlightDiv);
+    }
+
+    if(tokens !== null) {
+        const tokenDiv = document.createElement('div');
+        tokenDiv.classList.add('token-info');
+        tokenDiv.textContent = `Tokens used: ${tokens}`;
+        messageDiv.appendChild(tokenDiv);
+    }
+
     chatContainer.appendChild(messageDiv);
-    chatContainer.scrollTop = chatContainer.scrollHeight; // Auto-scroll to the bottom
+
+    if(quickReplies.length) {
+        const container = document.createElement('div');
+        container.classList.add('quick-replies');
+        quickReplies.forEach(q => {
+            const btn = document.createElement('button');
+            btn.classList.add('quick-reply-btn');
+            btn.textContent = q;
+            btn.onclick = () => {
+                userInput.value = q;
+                inputForm.dispatchEvent(new Event('submit'));
+                container.remove();
+            };
+            container.appendChild(btn);
+        });
+        chatContainer.appendChild(container);
+    }
+
+    chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
-// Handle the user's question submission
-inputForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const question = userInput.value.trim();
-    if (!question) {
-        return;
-    }
+// Typing indicator
+function showTyping() {
+    const div = document.createElement('div');
+    div.id = 'typing-indicator';
+    div.classList.add('message', 'bot-message');
+    div.innerHTML = `<p>Nova is typing<span class="dots">...</span></p>`;
+    chatContainer.appendChild(div);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+function hideTyping() { 
+    const d = document.getElementById('typing-indicator'); 
+    if(d) d.remove(); 
+}
 
-    addMessage(question, 'user-message');
-    userInput.value = '';
-    toggleLoading(true);
+// Loading toggle
+function toggleLoading(isLoading) {
+    sendButton.disabled = isLoading;
+    userInput.disabled = isLoading;
+    fileInput.disabled = isLoading;
+    viewKnowledgeBtn.disabled = isLoading;
+    resetKnowledgeBtn.disabled = isLoading;
+    sendButton.innerHTML = isLoading ? `<div class="loader"></div>` : 
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-6 h-6">
+            <path d="M3.478 2.405a.75.75 0 0 0-.926.94l2.432 7.917H17.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.917a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.405Z" />
+        </svg>`;
+}
 
-    try {
-        const response = await fetch('http://127.0.0.1:8000/ask', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question: question })
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const answer = data.answer;
-        
-        if (answer) {
-            addMessage(answer, 'bot-message', 'Knowledge Base');
-        } else {
-            addMessage("Sorry, I could not find a relevant answer.", 'bot-message');
-        }
-    } catch (error) {
-        console.error("Error asking question:", error);
-        addMessage(`I'm sorry, an error occurred while connecting to the bot. Please check the server.`, 'bot-message');
-    } finally {
-        toggleLoading(false);
-    }
-});
-
-// Handle file input changes
-fileInput.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) {
-        return;
-    }
-
-    addMessage(`Uploading document: ${file.name}...`, 'bot-message');
-    toggleLoading(true);
-
-    try {
-        const formData = new FormData();
-        formData.append('file', file);
-        
-        const response = await fetch('http://127.0.0.1:8000/add-knowledge', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        addMessage(data.message, 'bot-message', file.name);
-
-    } catch (error) {
-        console.error("Error uploading file:", error);
-        addMessage(`Failed to upload file. Please check the server and try again.`, 'bot-message');
-    } finally {
-        toggleLoading(false);
-    }
-});
-
-// Handle viewing knowledge
-viewKnowledgeBtn.addEventListener('click', async () => {
+// Fetch knowledge
+async function fetchKnowledgeBase(topic='') {
     knowledgeList.innerHTML = '<p class="text-center text-gray-400">Loading knowledge base...</p>';
-    knowledgeModal.style.display = 'flex';
-
     try {
-        const response = await fetch(`http://127.0.0.1:8000/view-knowledge`);
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
-
-        if (data.knowledge && data.knowledge.length > 0) {
-            knowledgeList.innerHTML = ''; // Clear loading message
+        let url = 'http://127.0.0.1:8000/view-knowledge';
+        if(topic) url += `?topic=${topic}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        knowledgeList.innerHTML = '';
+        if(data.knowledge.length) {
             data.knowledge.forEach(item => {
                 const div = document.createElement('div');
                 div.className = 'p-4 rounded-lg bg-gray-800 border border-gray-700 break-words';
-                div.innerHTML = `<p class="font-bold text-sm text-sky-400">${item.source}</p><p class="mt-2 text-sm">${item.content}</p>`;
+                div.innerHTML = `<p class="font-bold text-sm text-sky-400">${item.source}</p>
+                                 <p class="mt-2 text-sm">${item.content}</p>`;
                 knowledgeList.appendChild(div);
             });
         } else {
             knowledgeList.innerHTML = '<p class="text-center text-gray-400">Knowledge base is empty.</p>';
         }
-    } catch (error) {
-        console.error("Error fetching knowledge:", error);
-        knowledgeList.innerHTML = `<p class="text-center text-red-400">Failed to load knowledge. Server might be down.</p>`;
+    } catch(e) {
+        knowledgeList.innerHTML = '<p class="text-center text-red-400">Failed to load knowledge. Server might be down.</p>';
     }
+}
+
+// Submit question
+inputForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const q = userInput.value.trim();
+    if(!q) return;
+
+    // Add to prompt history only if it's not empty
+    if(q !== '') promptHistory.push(q);
+    historyIndex = promptHistory.length; // Point past the last item
+
+    addMessage(q, 'user-message'); 
+    userInput.value = '';
+    toggleLoading(true);
+    showTyping();
+
+    try {
+        const res = await fetch('http://127.0.0.1:8000/ask', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({question:q})
+        });
+
+        const data = await res.json();
+        hideTyping();
+
+        addMessage(
+            data.answer || "No answer found", 
+            'bot-message', 
+            'Knowledge Base', 
+            data.highlight, 
+            data.quick_replies || [],
+            data.tokens
+        );
+
+    } catch(err) { 
+        hideTyping(); 
+        addMessage("Server error!", 'bot-message'); 
+    }
+
+    toggleLoading(false);
+});
+
+// File upload
+fileInput.addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if(!file) return;
+    addMessage(`Uploading ${file.name}...`, 'bot-message');
+    toggleLoading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+        const res = await fetch('http://127.0.0.1:8000/upload', { method:'POST', body:formData });
+        const data = await res.json();
+        addMessage(data.message, 'bot-message');
+    } catch(err) { addMessage("Upload failed!", 'bot-message'); }
+    toggleLoading(false);
+});
+
+// Knowledge modal & reset
+viewKnowledgeBtn.addEventListener('click', () => {
+    knowledgeModal.style.display='flex';
+    fetchKnowledgeBase();
+});
+closeModalBtn.addEventListener('click', () => knowledgeModal.style.display='none');
+resetKnowledgeBtn.addEventListener('click', async ()=> {
+    toggleLoading(true);
+    try{
+        const res = await fetch('http://127.0.0.1:8000/reset-knowledge', {method:'POST'});
+        const data = await res.json();
+        addMessage(data.message, 'bot-message');
+    }catch(err){ addMessage("Reset failed!", 'bot-message'); }
+    toggleLoading(false);
+});
+
+// Prompt history navigation (fixed)
+// Elements
+const viewHistoryBtn = document.getElementById('view-history-btn');
+const historyModal = document.getElementById('history-modal');
+const closeHistoryModalBtn = document.getElementById('close-history-modal-btn');
+const historyList = document.getElementById('history-list');
+
+// Open history modal and populate prompts
+viewHistoryBtn.addEventListener('click', () => {
+    historyList.innerHTML = ''; // Clear previous list
+
+    if(promptHistory.length === 0){
+        historyList.innerHTML = '<p class="text-center text-gray-400">No history yet.</p>';
+    } else {
+        promptHistory.forEach((prompt, index) => {
+            const div = document.createElement('div');
+            div.className = 'p-2 rounded-lg bg-gray-800 border border-gray-700 break-words cursor-pointer';
+            div.textContent = prompt;
+            div.onclick = () => {
+                userInput.value = prompt;  // Fill input with clicked prompt
+                historyModal.style.display = 'none'; // Close modal
+                userInput.focus();
+            };
+            historyList.appendChild(div);
+        });
+    }
+
+    historyModal.style.display = 'flex'; // Show modal
 });
 
 // Close modal
-closeModalBtn.addEventListener('click', () => {
-    knowledgeModal.style.display = 'none';
+closeHistoryModalBtn.addEventListener('click', () => {
+    historyModal.style.display = 'none';
 });
 
-// Close modal by clicking outside
+// Optional: close modal if clicking outside content
 window.addEventListener('click', (e) => {
-    if (e.target === knowledgeModal) {
-        knowledgeModal.style.display = 'none';
+    if(e.target === historyModal){
+        historyModal.style.display = 'none';
     }
 });
-
-// Function to toggle loading state
-function toggleLoading(isLoading) {
-    if (isLoading) {
-        sendButton.disabled = true;
-        sendButton.innerHTML = `<div class="loader"></div>`;
-        userInput.disabled = true;
-        fileInput.disabled = true;
-        viewKnowledgeBtn.disabled = true;
-    } else {
-        sendButton.disabled = false;
-        sendButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-6 h-6">
-            <path d="M3.478 2.405a.75.75 0 0 0-.926.94l2.432 7.917H17.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.917a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.405Z" />
-        </svg>`;
-        userInput.disabled = false;
-        fileInput.disabled = false;
-        viewKnowledgeBtn.disabled = false;
-    }
-}

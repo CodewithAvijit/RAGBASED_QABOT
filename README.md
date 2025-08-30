@@ -1,4 +1,6 @@
 ## RAGBOT
 
 
-![UI](UI.png)
+![UI](UI/UI.png)
+![HISTORY](UI/HISTORY.png)
+![KNOWLEDGE_BASE](UI/BASE.png)
